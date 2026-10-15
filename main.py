@@ -14,9 +14,8 @@ TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 SUPPORT_CHAT_ID = os.environ.get("SUPPORT_CHAT_ID", "").strip()
 API = f"https://api.telegram.org/bot{TOKEN}"
 
-# Temporary support conversation state.
-# Render's temporary filesystem may reset on restart.
 SUPPORT_FILE = "/tmp/focusflow_support.json"
+TICKETS_FILE = "/tmp/focusflow_tickets.json"
 
 app = Flask(__name__)
 
@@ -24,56 +23,51 @@ app = Flask(__name__)
 def send_message(chat_id, text):
     response = requests.post(
         f"{API}/sendMessage",
-        json={
-            "chat_id": chat_id,
-            "text": text,
-            "disable_web_page_preview": True
-        },
+        json={"chat_id": chat_id, "text": text},
         timeout=15
     )
     response.raise_for_status()
     result = response.json()
 
     if not result.get("ok"):
-        raise RuntimeError("Telegram could not send the message")
+        raise RuntimeError("Telegram message failed")
 
     return result
 
 
-def load_support():
+def load_json(path):
     try:
-        with open(SUPPORT_FILE, "r", encoding="utf-8") as file:
+        with open(path, "r", encoding="utf-8") as file:
             data = json.load(file)
             return data if isinstance(data, dict) else {}
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return {}
 
 
-def save_support(data):
-    try:
-        with open(SUPPORT_FILE, "w", encoding="utf-8") as file:
-            json.dump(data, file)
-    except OSError:
-        logging.exception("Could not save support conversation state")
-        raise
+def save_json(path, data):
+    with open(path, "w", encoding="utf-8") as file:
+        json.dump(data, file)
 
 
 def get_user_details(message):
     user = message.get("from") or {}
 
-    first_name = user.get("first_name") or ""
-    last_name = user.get("last_name") or ""
-    full_name = " ".join(
-        part for part in (first_name, last_name) if part
-    ) or "Not provided by Telegram"
+    name = " ".join(
+        part for part in (
+            user.get("first_name", ""),
+            user.get("last_name", "")
+        ) if part
+    ) or "Unknown Person"
 
     username = user.get("username")
-    username_display = f"@{username}" if username else "Not provided"
+    username = f"@{username}" if username else "Not provided"
 
-    user_id = user.get("id", "Not provided")
-    language = user.get("language_code", "Not provided")
-
-    return full_name, username_display, user_id, language
+    return (
+        name,
+        username,
+        user.get("id", "Unknown"),
+        user.get("language_code", "Not provided")
+    )
 
 
 @app.route("/", methods=["GET"])
@@ -95,19 +89,66 @@ def telegram():
     chat_key = str(chat_id)
     command = text.split()[0].split("@")[0].lower()
 
-    support_users = load_support()
+    support_users = load_json(SUPPORT_FILE)
+    tickets = load_json(TICKETS_FILE)
+
+    # Only the configured support owner can send replies.
+    if command == "/reply":
+        if not SUPPORT_CHAT_ID or chat_key != SUPPORT_CHAT_ID:
+            send_message(chat_id, "⛔ You are not authorized to use this command.")
+            return {"ok": True}
+
+        parts = text.split(maxsplit=2)
+
+        if len(parts) < 3:
+            send_message(
+                chat_id,
+                "Usage:\n/reply FF-TICKETID Your message here"
+            )
+            return {"ok": True}
+
+        ticket_id = parts[1].upper()
+        reply_text = parts[2]
+        ticket = tickets.get(ticket_id)
+
+        if not ticket:
+            send_message(
+                chat_id,
+                "❌ Ticket not found.\n"
+                "It may have been lost after a server restart."
+            )
+            return {"ok": True}
+
+        try:
+            send_message(
+                ticket["chat_id"],
+                "📩 Reply from FocusFlow Support\n\n" + reply_text
+            )
+            send_message(
+                chat_id,
+                f"✅ Reply delivered successfully!\nTicket: {ticket_id}"
+            )
+        except Exception:
+            logging.exception("Could not deliver ticket reply")
+            send_message(
+                chat_id,
+                "❌ Reply could not be delivered. "
+                "The user may have blocked the bot."
+            )
+
+        return {"ok": True}
 
     if command == "/start":
         support_users.pop(chat_key, None)
-        save_support(support_users)
+        save_json(SUPPORT_FILE, support_users)
 
         reply = (
             "Welcome to FocusFlow! 🎯\n\n"
             "Your study and productivity companion.\n\n"
-            "/features - Explore FocusFlow\n"
+            "/features - Explore features\n"
             "/study - Study assistance\n"
             "/support - Report a problem\n"
-            "/cancel - Cancel a support request\n"
+            "/cancel - Cancel support request\n"
             "/about - About FocusFlow\n"
             "/help - Show commands"
         )
@@ -119,15 +160,12 @@ def telegram():
             "/features - Explore features\n"
             "/study - Study assistance\n"
             "/support - Report a problem\n"
-            "/cancel - Cancel a support request\n"
+            "/cancel - Cancel support request\n"
             "/about - About FocusFlow"
         )
 
     elif command == "/features":
-        reply = (
-            "FocusFlow helps you organize your study "
-            "and productivity. 🎯"
-        )
+        reply = "FocusFlow helps you organize your studies and productivity. 🎯"
 
     elif command == "/study":
         reply = "What subject are you studying today? 📚"
@@ -136,18 +174,18 @@ def telegram():
         support_users[chat_key] = {
             "started_at": datetime.now(timezone.utc).isoformat()
         }
-        save_support(support_users)
+        save_json(SUPPORT_FILE, support_users)
 
         reply = (
             "🛠️ FocusFlow Support\n\n"
             "Please describe the problem you're experiencing.\n"
-            "Example: My PDF is not opening.\n\n"
+            "Example: My Maths PDF is not opening.\n\n"
             "Send /cancel to cancel."
         )
 
     elif command == "/cancel":
         if support_users.pop(chat_key, None) is not None:
-            save_support(support_users)
+            save_json(SUPPORT_FILE, support_users)
             reply = "Your support request was cancelled."
         else:
             reply = "You don't have an active support request."
@@ -160,21 +198,14 @@ def telegram():
 
     elif chat_key in support_users:
         support_users.pop(chat_key, None)
-        save_support(support_users)
+        save_json(SUPPORT_FILE, support_users)
 
         if not SUPPORT_CHAT_ID:
-            logging.error("SUPPORT_CHAT_ID is not configured")
-            reply = (
-                "Sorry, support is temporarily unavailable. "
-                "Please try again later."
-            )
+            reply = "Sorry, support is temporarily unavailable."
         else:
             try:
-                full_name, username, user_id, language = (
-                    get_user_details(message)
-                )
-
-                ticket_id = uuid.uuid4().hex[:8].upper()
+                name, username, user_id, language = get_user_details(message)
+                ticket_id = "FF-" + uuid.uuid4().hex[:8].upper()
                 timestamp = datetime.now(timezone.utc).strftime(
                     "%Y-%m-%d %H:%M:%S UTC"
                 )
@@ -182,33 +213,31 @@ def telegram():
                 report = (
                     "📩 NEW FOCUSFLOW SUPPORT TICKET\n"
                     "━━━━━━━━━━━━━━━━━━\n"
-                    f"Ticket ID: FF-{ticket_id}\n"
+                    f"Ticket ID: {ticket_id}\n"
                     f"Date: {timestamp}\n\n"
                     "👤 USER DETAILS\n"
-                    f"Name: {full_name}\n"
+                    f"Name: {name}\n"
                     f"Username: {username}\n"
                     f"Telegram User ID: {user_id}\n"
                     f"Chat ID: {chat_id}\n"
                     f"Language: {language}\n\n"
                     "📝 REPORTED ISSUE\n"
-                    f"{text}\n\n"
-                    "Reply to this user through the bot "
-                    "only if a reply feature is configured."
+                    f"{text}"
                 )
 
                 send_message(SUPPORT_CHAT_ID, report)
 
-                reply = (
-                    "Thanks! ✅ Your support request has been "
-                    f"sent to the FocusFlow support owner.\n\n"
-                    f"Ticket ID: FF-{ticket_id}\n"
-                    "Keep this ID for reference."
-                )
+                tickets[ticket_id] = {
+                    "chat_id": chat_id,
+                    "user_id": user_id,
+                    "created_at": timestamp
+                }
+                save_json(TICKETS_FILE, tickets)
 
-                logging.info(
-                    "Forwarded support ticket FF-%s for user ID %s",
-                    ticket_id,
-                    user_id
+                reply = (
+                    "Thanks! ✅ Your support request has been sent.\n\n"
+                    f"Ticket ID: {ticket_id}\n"
+                    "Keep this ID for reference."
                 )
 
             except Exception:
