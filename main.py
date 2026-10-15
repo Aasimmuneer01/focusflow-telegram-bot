@@ -8,6 +8,7 @@ from flask import Flask, request
 logging.basicConfig(level=logging.INFO)
 
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+SUPPORT_CHAT_ID = os.environ.get("SUPPORT_CHAT_ID", "").strip()
 API = f"https://api.telegram.org/bot{TOKEN}"
 SUPPORT_FILE = "/tmp/focusflow_support.json"
 
@@ -79,10 +80,7 @@ def telegram():
         )
 
     elif command == "/features":
-        reply = (
-            "FocusFlow helps you organize your study "
-            "and productivity. 🎯"
-        )
+        reply = "FocusFlow helps you organize your study and productivity. 🎯"
 
     elif command == "/study":
         reply = "What subject are you studying today? 📚"
@@ -106,25 +104,38 @@ def telegram():
     elif command == "/about":
         reply = "FocusFlow is your study and productivity companion."
 
-    elif text.startswith("/"):
+    elif command.startswith("/"):
         reply = "Unknown command. Send /help to see available commands."
 
     elif support_users.get(chat_key):
         support_users.pop(chat_key, None)
         save_support(support_users)
-        reply = (
-            "Thanks for describing your issue! ✅\n\n"
-            "Your message has been received by the bot, "
-            "but it has not been sent to a human support team.\n"
-            "Please contact the FocusFlow owner for further help."
-        )
-        logging.info("Support message received from chat %s", chat_id)
+
+        if not SUPPORT_CHAT_ID:
+            reply = "Sorry, support is temporarily unavailable. Please try again later."
+        else:
+            try:
+                user = message.get("from", {})
+                username = user.get("username", "Not provided")
+                first_name = user.get("first_name", "Unknown")
+                report = (
+                    "📩 New FocusFlow Support Request\n\n"
+                    f"Name: {first_name}\n"
+                    f"Username: @{username}\n"
+                    f"Chat ID: {chat_id}\n\n"
+                    f"Issue:\n{text}"
+                )
+                send_message(SUPPORT_CHAT_ID, report)
+                reply = (
+                    "Thanks! ✅ Your issue has been forwarded "
+                    "to the FocusFlow support owner."
+                )
+            except Exception:
+                logging.exception("Failed to forward support request")
+                reply = "Sorry, we couldn't forward your issue. Please try again later."
 
     else:
-        reply = (
-            "I didn't understand that message. "
-            "Send /help to see available commands."
-        )
+        reply = "I didn't understand that message. Send /help to see available commands."
 
     send_message(chat_id, reply)
     return {"ok": True}
