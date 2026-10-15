@@ -1,5 +1,6 @@
 
 import os
+import json
 import logging
 import requests
 from flask import Flask, request
@@ -8,6 +9,7 @@ logging.basicConfig(level=logging.INFO)
 
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 API = f"https://api.telegram.org/bot{TOKEN}"
+SUPPORT_FILE = "/tmp/focusflow_support.json"
 
 app = Flask(__name__)
 
@@ -21,6 +23,19 @@ def send_message(chat_id, text):
     response.raise_for_status()
 
 
+def load_support():
+    try:
+        with open(SUPPORT_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def save_support(data):
+    with open(SUPPORT_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+
+
 @app.route("/", methods=["GET"])
 def home():
     return "FocusFlow Telegram Bot is running!"
@@ -31,25 +46,29 @@ def telegram():
     update = request.get_json(silent=True) or {}
     message = update.get("message", {})
     chat = message.get("chat", {})
-    text = message.get("text", "")
+    text = message.get("text", "").strip()
 
     if not chat or not text:
         return {"ok": True}
 
     chat_id = chat["id"]
+    chat_key = str(chat_id)
     command = text.split()[0].split("@")[0].lower()
+    support_users = load_support()
 
     if command == "/start":
+        support_users.pop(chat_key, None)
+        save_support(support_users)
         reply = (
             "Welcome to FocusFlow! 🎯\n\n"
             "Your study and productivity companion.\n\n"
-            "Commands:\n"
             "/features - Explore FocusFlow\n"
             "/study - Study assistance\n"
             "/support - Get help\n"
             "/about - About FocusFlow\n"
             "/help - Show commands"
         )
+
     elif command == "/help":
         reply = (
             "/start - Start the bot\n"
@@ -58,16 +77,54 @@ def telegram():
             "/support - Get help\n"
             "/about - About FocusFlow"
         )
+
     elif command == "/features":
-        reply = "FocusFlow helps you organize your study and productivity."
+        reply = (
+            "FocusFlow helps you organize your study "
+            "and productivity. 🎯"
+        )
+
     elif command == "/study":
-        reply = "What subject are you studying today?"
+        reply = "What subject are you studying today? 📚"
+
     elif command == "/support":
-        reply = "Please describe your FocusFlow issue."
+        support_users[chat_key] = True
+        save_support(support_users)
+        reply = (
+            "Please describe your FocusFlow issue. 🛠️\n\n"
+            "For example: Not installing\n\n"
+            "Send /cancel to cancel."
+        )
+
+    elif command == "/cancel":
+        if support_users.pop(chat_key, None):
+            save_support(support_users)
+            reply = "Support message cancelled."
+        else:
+            reply = "There is no active support request."
+
     elif command == "/about":
         reply = "FocusFlow is your study and productivity companion."
-    else:
+
+    elif text.startswith("/"):
         reply = "Unknown command. Send /help to see available commands."
+
+    elif support_users.get(chat_key):
+        support_users.pop(chat_key, None)
+        save_support(support_users)
+        reply = (
+            "Thanks for describing your issue! ✅\n\n"
+            "Your message has been received by the bot, "
+            "but it has not been sent to a human support team.\n"
+            "Please contact the FocusFlow owner for further help."
+        )
+        logging.info("Support message received from chat %s", chat_id)
+
+    else:
+        reply = (
+            "I didn't understand that message. "
+            "Send /help to see available commands."
+        )
 
     send_message(chat_id, reply)
     return {"ok": True}
