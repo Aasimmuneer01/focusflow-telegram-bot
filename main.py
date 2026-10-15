@@ -1,4 +1,3 @@
-
 import os
 import json
 import logging
@@ -17,13 +16,19 @@ API = f"https://api.telegram.org/bot{TOKEN}"
 SUPPORT_FILE = "/tmp/focusflow_support.json"
 TICKETS_FILE = "/tmp/focusflow_tickets.json"
 
+APP_URL = "https://noteshub9.vercel.app"
+
 app = Flask(__name__)
 
 
 def send_message(chat_id, text):
     response = requests.post(
         f"{API}/sendMessage",
-        json={"chat_id": chat_id, "text": text},
+        json={
+            "chat_id": chat_id,
+            "text": text,
+            "disable_web_page_preview": True
+        },
         timeout=15
     )
     response.raise_for_status()
@@ -70,6 +75,25 @@ def get_user_details(message):
     )
 
 
+def app_information():
+    return (
+        "🎯 FOCUSFLOW — STUDY SMARTER\n\n"
+        "FocusFlow is a study and productivity app "
+        "designed to help you stay organized and focused.\n\n"
+        "✨ WHAT YOU CAN EXPLORE\n"
+        "📚 Study resources and learning materials\n"
+        "📝 Study planning and task organization\n"
+        "⏱️ Focus and productivity tools\n"
+        "📈 Tools to help manage your study routine\n\n"
+        "📲 INSTALL / ACCESS FOCUSFLOW\n"
+        f"{APP_URL}\n\n"
+        "Open the website and follow the available "
+        "instructions to access or install the app.\n\n"
+        "🛠️ Need help? Send /support\n"
+        "ℹ️ More information: /about"
+    )
+
+
 @app.route("/", methods=["GET"])
 def home():
     return "FocusFlow Telegram Bot is running!"
@@ -92,10 +116,13 @@ def telegram():
     support_users = load_json(SUPPORT_FILE)
     tickets = load_json(TICKETS_FILE)
 
-    # Only the configured support owner can send replies.
+    # Owner-only support replies
     if command == "/reply":
         if not SUPPORT_CHAT_ID or chat_key != SUPPORT_CHAT_ID:
-            send_message(chat_id, "⛔ You are not authorized to use this command.")
+            send_message(
+                chat_id,
+                "⛔ You are not authorized to use this command."
+            )
             return {"ok": True}
 
         parts = text.split(maxsplit=2)
@@ -114,8 +141,8 @@ def telegram():
         if not ticket:
             send_message(
                 chat_id,
-                "❌ Ticket not found.\n"
-                "It may have been lost after a server restart."
+                "❌ Ticket not found. It may have been lost "
+                "after a server restart or redeployment."
             )
             return {"ok": True}
 
@@ -145,30 +172,62 @@ def telegram():
         reply = (
             "Welcome to FocusFlow! 🎯\n\n"
             "Your study and productivity companion.\n\n"
+            "/app - App information and installation\n"
+            "/about - About FocusFlow\n"
             "/features - Explore features\n"
             "/study - Study assistance\n"
             "/support - Report a problem\n"
-            "/cancel - Cancel support request\n"
-            "/about - About FocusFlow\n"
+            "/cancel - Cancel a support request\n"
             "/help - Show commands"
         )
 
     elif command == "/help":
         reply = (
-            "FocusFlow Commands 🎯\n\n"
+            "🎯 FOCUSFLOW BOT HELP\n\n"
             "/start - Start the bot\n"
+            "/app - App information and installation\n"
+            "/about - About FocusFlow\n"
             "/features - Explore features\n"
             "/study - Study assistance\n"
             "/support - Report a problem\n"
-            "/cancel - Cancel support request\n"
-            "/about - About FocusFlow"
+            "/cancel - Cancel a support request\n\n"
+            "Choose /app to find the FocusFlow website."
+        )
+
+    elif command in ("/app", "/install", "/download"):
+        reply = app_information()
+
+    elif command == "/about":
+        reply = (
+            "🎯 ABOUT FOCUSFLOW\n\n"
+            "FocusFlow is a study and productivity app "
+            "created to help students organize learning "
+            "materials, plan tasks, and build better "
+            "study routines.\n\n"
+            "📲 Website and installation information:\n"
+            f"{APP_URL}\n\n"
+            "For help with an issue, use /support.\n"
+            "For app information, use /app."
         )
 
     elif command == "/features":
-        reply = "FocusFlow helps you organize your studies and productivity. 🎯"
+        reply = (
+            "✨ FOCUSFLOW FEATURES\n\n"
+            "📚 Study resources\n"
+            "📝 Task and study organization\n"
+            "⏱️ Focus and productivity tools\n"
+            "📈 Study routine management\n\n"
+            "Available features may depend on the app version.\n"
+            "Visit the website for more information:\n"
+            f"{APP_URL}"
+        )
 
     elif command == "/study":
-        reply = "What subject are you studying today? 📚"
+        reply = (
+            "📚 Ready to study?\n\n"
+            "Tell me what subject you're studying today.\n"
+            "For app-related problems, use /support."
+        )
 
     elif command == "/support":
         support_users[chat_key] = {
@@ -177,7 +236,7 @@ def telegram():
         save_json(SUPPORT_FILE, support_users)
 
         reply = (
-            "🛠️ FocusFlow Support\n\n"
+            "🛠️ FOCUSFLOW SUPPORT\n\n"
             "Please describe the problem you're experiencing.\n"
             "Example: My Maths PDF is not opening.\n\n"
             "Send /cancel to cancel."
@@ -189,9 +248,6 @@ def telegram():
             reply = "Your support request was cancelled."
         else:
             reply = "You don't have an active support request."
-
-    elif command == "/about":
-        reply = "FocusFlow is your study and productivity companion."
 
     elif command.startswith("/"):
         reply = "Unknown command. Send /help to see available commands."
@@ -249,7 +305,7 @@ def telegram():
 
     else:
         reply = (
-            "I didn't understand that message. "
+            "I didn't understand that message.\n"
             "Send /help to see available commands."
         )
 
@@ -266,4 +322,3 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=int(os.environ.get("PORT", "10000"))
     )
-
